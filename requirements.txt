@@ -1,0 +1,12 @@
+pandas
+scikit-learn
+numpy
+matplotlib
+xgboost
+ftfy
+contractions
+nltk
+spacy
+# run the following command to download the English model for spaCy
+# python -m spacy download en_core_web_sm
+tensorflow
