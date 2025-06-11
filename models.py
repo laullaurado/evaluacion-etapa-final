@@ -1,49 +1,32 @@
-"""
-Authors:
-    - Lauren Lissette Llauradó Reyes
-    - Carlos Alberto Sánchez Calderón
-Date:
-    2025-05-14
-Description:
-    This script defines a machine learning pipeline for suicide ideation detection.
-    It includes a function to train and evaluate models.
-"""
-
-# from sklearn.model_selection import StratifiedKFold  # type: ignore
-# from sklearn.tree import DecisionTreeClassifier  # type: ignore
-# from sklearn.linear_model import LogisticRegression  # type: ignore
-# from sklearn.ensemble import RandomForestClassifier  # type: ignore
-from sklearn.metrics import confusion_matrix, ConfusionMatrixDisplay, roc_curve, roc_auc_score, precision_score, recall_score, f1_score, accuracy_score  # type: ignore
-import matplotlib.pyplot as plt  # type: ignore
+from sklearn.metrics import confusion_matrix, ConfusionMatrixDisplay, roc_curve, roc_auc_score, precision_score, recall_score, f1_score, accuracy_score
+import matplotlib.pyplot as plt
 import numpy as np
 from sklearn.model_selection import StratifiedKFold
-from sklearn.svm import SVC  # type: ignore
-import xgboost as xgb  # type: ignore
+from sklearn.svm import SVC
+import xgboost as xgb
 from enum import Enum
 
-# Add these to your existing imports
-from sklearn.cluster import KMeans
-from sklearn.metrics import silhouette_score, davies_bouldin_score
+from sklearn.neighbors import KNeighborsClassifier
 from sklearn.preprocessing import StandardScaler
 import tensorflow as tf
 from tensorflow.keras.models import Sequential
-from tensorflow.keras.layers import Dense, Dropout
+from tensorflow.keras.layers import Dense, Dropout, Input
 from tensorflow.keras.callbacks import EarlyStopping
 
 
 class Model(Enum):
-    KMEANS = "KMeans"
+    KNN = "KNN"  # Changed from KMEANS to KNN
     NN = "NeuralNetwork"
 
 
-def train_and_evaluate_model(X_tfidf, y, model: Model):
+def train_and_evaluate_model(X, y, model: Model):
     """
-    Trains and evaluates either K-means clustering or a Neural Network with hyperparameter tuning.
+    Trains and evaluates either KNN or a Neural Network with hyperparameter tuning.
 
     Args:
-        X_tfidf: Feature matrix
+        X: Feature matrix
         y: Target labels
-        model: Model type (KMEANS or NN)
+        model: Model type (KNN or NN)
 
     Returns:
         best_model: The best trained model
@@ -51,132 +34,111 @@ def train_and_evaluate_model(X_tfidf, y, model: Model):
     """
 
     match model:
-        case Model.KMEANS:
-            return train_kmeans(X_tfidf, y)
+        case Model.KNN:
+            return train_knn(X, y)  # Changed from train_kmeans to train_knn
         case Model.NN:
-            return train_neural_network(X_tfidf, y)
+            return train_neural_network(X, y)
 
 
-def train_kmeans(X, y):
-    """Train K-means clustering with different numbers of clusters"""
-    print("\n=== Training K-means with different cluster counts ===")
+def train_knn(X, y):
+    """Train KNN classifier with different numbers of neighbors"""
+    print("\n=== Training KNN with different neighbor counts ===")
 
-    # Standardize the features (important for K-means)
+    # Standardize the features
     scaler = StandardScaler()
-    X_scaled = scaler.fit_transform(X.toarray())
+    X_scaled = scaler.fit_transform(
+        X.toarray() if hasattr(X, "toarray") else X)
 
-    # Try different cluster counts
-    cluster_range = [2, 3, 4, 5, 8, 10]
+    # Prepare for cross-validation
+    skf = StratifiedKFold(n_splits=5, shuffle=True, random_state=42)
+
+    # Try different neighbor counts
+    k_range = [3, 5, 7, 9, 11, 15, 21]
     results = []
 
-    for n_clusters in cluster_range:
-        # Train K-means
-        kmeans = KMeans(n_clusters=n_clusters, random_state=42, n_init=10)
-        cluster_labels = kmeans.fit_predict(X_scaled)
+    for n_neighbors in k_range:
+        # Setup KNN model
+        knn = KNeighborsClassifier(n_neighbors=n_neighbors)
 
-        # Evaluate using silhouette score and Davies-Bouldin index
-        silhouette = silhouette_score(X_scaled, cluster_labels)
-        davies_bouldin = davies_bouldin_score(X_scaled, cluster_labels)
+        # Cross validation metrics
+        cv_auc = []
+        cv_accuracy = []
+        cv_precision = []
+        cv_recall = []
+        cv_f1 = []
 
-        # Calculate classification metrics by mapping clusters to classes
-        cluster_to_label = {}
-        for cluster in range(n_clusters):
-            mask = (cluster_labels == cluster)
-            if mask.sum() > 0:
-                cluster_to_label[cluster] = np.argmax(np.bincount(y[mask]))
+        for train_idx, val_idx in skf.split(X_scaled, y):
+            X_train, X_val = X_scaled[train_idx], X_scaled[val_idx]
+            y_train, y_val = y[train_idx], y[val_idx]
 
-        # Map predictions to labels
-        y_pred = np.array([cluster_to_label.get(label, 0)
-                          for label in cluster_labels])
+            # Train and predict
+            knn.fit(X_train, y_train)
+            y_pred = knn.predict(X_val)
+            # Probability for positive class
+            y_proba = knn.predict_proba(X_val)[:, 1]
 
-        # Create probability estimate for AUC calculation
-        y_proba = np.zeros((len(y), 2))
-        y_proba[np.arange(len(y)), y_pred] = 1
-        y_proba_positive = y_proba[:, 1]  # Probability of positive class
+            # Calculate metrics
+            cv_auc.append(roc_auc_score(y_val, y_proba))
+            cv_accuracy.append(accuracy_score(y_val, y_pred))
+            cv_precision.append(precision_score(y_val, y_pred))
+            cv_recall.append(recall_score(y_val, y_pred))
+            cv_f1.append(f1_score(y_val, y_pred))
 
-        # Calculate AUC if possible (requires both classes to be present in predictions)
-        auc = 0.5  # Default value (random classifier)
-        if len(np.unique(y_pred)) > 1:
-            auc = roc_auc_score(y, y_proba_positive)
+        # Calculate mean metrics
+        mean_auc = np.mean(cv_auc)
+        mean_accuracy = np.mean(cv_accuracy)
+        mean_precision = np.mean(cv_precision)
+        mean_recall = np.mean(cv_recall)
+        mean_f1 = np.mean(cv_f1)
 
         # Add to results
         results.append({
-            'n_clusters': n_clusters,
-            'silhouette': silhouette,
-            'davies_bouldin': davies_bouldin,
-            'inertia': kmeans.inertia_,
-            'model': kmeans,
-            'auc': auc,
-            'y_pred': y_pred,
-            'cluster_to_label': cluster_to_label
+            'n_neighbors': n_neighbors,
+            'auc': mean_auc,
+            'accuracy': mean_accuracy,
+            'precision': mean_precision,
+            'recall': mean_recall,
+            'f1': mean_f1
         })
 
         print(
-            f"Clusters: {n_clusters}, Silhouette: {silhouette:.3f}, Davies-Bouldin: {davies_bouldin:.3f}, AUC: {auc:.3f}")
+            f"k={n_neighbors}: AUC={mean_auc:.3f}, Accuracy={mean_accuracy:.3f}, F1={mean_f1:.3f}")
 
     # Visualize results
     plt.figure(figsize=(15, 4))
 
-    # Silhouette scores (higher is better)
-    plt.subplot(1, 4, 1)
-    plt.plot([r['n_clusters'] for r in results], [r['silhouette']
-             for r in results], 'o-')
-    plt.xlabel('Number of clusters')
-    plt.ylabel('Silhouette Score')
-    plt.title('Silhouette Score vs Cluster Count')
-
-    # Davies-Bouldin index (lower is better)
-    plt.subplot(1, 4, 2)
-    plt.plot([r['n_clusters'] for r in results], [r['davies_bouldin']
-             for r in results], 'o-')
-    plt.xlabel('Number of clusters')
-    plt.ylabel('Davies-Bouldin Index')
-    plt.title('Davies-Bouldin Index vs Cluster Count')
-
-    # Inertia (elbow method)
-    plt.subplot(1, 4, 3)
-    plt.plot([r['n_clusters'] for r in results], [r['inertia']
-             for r in results], 'o-')
-    plt.xlabel('Number of clusters')
-    plt.ylabel('Inertia')
-    plt.title('Elbow Method')
-
     # AUC (higher is better)
-    plt.subplot(1, 4, 4)
-    plt.plot([r['n_clusters'] for r in results], [r['auc']
+    plt.plot([r['n_neighbors'] for r in results], [r['auc']
              for r in results], 'o-')
-    plt.xlabel('Number of clusters')
+    plt.xlabel('Number of Neighbors (k)')
     plt.ylabel('AUC Score')
-    plt.title('AUC vs Cluster Count')
+    plt.title('AUC vs Neighbor Count')
 
     plt.tight_layout()
-    plt.savefig('kmeans_evaluation.png', dpi=300)
+    plt.savefig('knn_evaluation.png', dpi=300)
     plt.show()
 
-    # Find best model based on silhouette score (higher is better)
-    best_result_silhouette = max(results, key=lambda x: x['silhouette'])
-
     # Find best model based on AUC (higher is better)
-    best_result_auc = max(results, key=lambda x: x['auc'])
+    best_result = max(results, key=lambda x: x['auc'])
+    best_k = best_result['n_neighbors']
+    best_auc = best_result['auc']
 
-    best_model = best_result_auc['model']
-    best_auc = best_result_auc['auc']
+    print(f"Best KNN model by AUC: k={best_k} (AUC: {best_auc:.3f})")
 
-    print(
-        f"\nBest K-means model by silhouette: {best_result_silhouette['n_clusters']} clusters (score: {best_result_silhouette['silhouette']:.3f})")
-    print(
-        f"Best K-means model by AUC: {best_result_auc['n_clusters']} clusters (AUC: {best_auc:.3f})")
+    # Train final model with best k on full dataset
+    best_model = KNeighborsClassifier(n_neighbors=best_k)
+    best_model.fit(X_scaled, y)
 
-    # Use the best model by AUC
-    cluster_to_label = best_result_auc['cluster_to_label']
-    y_pred = best_result_auc['y_pred']
+    # Evaluate on training data (just for reporting)
+    y_pred = best_model.predict(X_scaled)
+    y_proba = best_model.predict_proba(X_scaled)[:, 1]
 
-    print("\n=== K-means as classifier ===")
+    print("\n=== KNN final metrics on training data ===")
     print(f"Accuracy: {accuracy_score(y, y_pred):.2f}")
     print(f"Precision: {precision_score(y, y_pred):.2f}")
     print(f"Recall: {recall_score(y, y_pred):.2f}")
     print(f"F1-score: {f1_score(y, y_pred):.2f}")
-    print(f"AUC: {best_auc:.2f}")
+    print(f"AUC: {roc_auc_score(y, y_proba):.2f}")
 
     return best_model, best_auc
 
@@ -212,14 +174,13 @@ def train_neural_network(X, y):
             y_train, y_val = y[train_idx], y[test_idx]
 
             # Build model
-            model = Sequential([
-                Dense(64, activation=activation,
-                      input_shape=(X_train.shape[1],)),
-                Dropout(0.3),
-                Dense(32, activation=activation),
-                Dropout(0.2),
-                Dense(1, activation='sigmoid')
-            ])
+            input_layer = Input(shape=(X_train.shape[1],))
+            x = Dense(64, activation=activation)(input_layer)
+            x = Dropout(0.3)(x)
+            x = Dense(32, activation=activation)(x)
+            x = Dropout(0.2)(x)
+            output = Dense(1, activation='sigmoid')(x)
+            model = tf.keras.models.Model(inputs=input_layer, outputs=output)
 
             model.compile(
                 optimizer='adam',
@@ -271,26 +232,23 @@ def train_neural_network(X, y):
         })
 
     # Visualize results
-    plt.figure(figsize=(12, 5))
+    plt.figure(figsize=(10, 5))
 
-    # Plot metrics comparison
-    metrics_to_plot = ['auc', 'accuracy', 'precision', 'recall', 'f1']
+    # Plot only AUC comparison
     x = np.arange(len(activations))
-    width = 0.15
 
-    for i, metric in enumerate(metrics_to_plot):
-        plt.bar(
-            x + (i - len(metrics_to_plot)/2 + 0.5) * width,
-            [r['metrics'][metric] for r in results],
-            width=width,
-            label=metric.capitalize()
-        )
+    plt.bar(
+        x,
+        [r['metrics']['auc'] for r in results],
+        width=0.4,
+        color='blue'
+    )
 
     plt.xlabel('Activation Function')
-    plt.ylabel('Score')
-    plt.title('Neural Network Performance by Activation Function')
+    plt.ylabel('AUC Score')
+    plt.title('Neural Network AUC Performance by Activation Function')
     plt.xticks(x, activations)
-    plt.legend()
+    plt.ylim(0.5, 1.0)  # AUC range from 0.5 to 1.0
     plt.tight_layout()
     plt.savefig('nn_activation_comparison.png', dpi=300)
     plt.show()
@@ -304,14 +262,13 @@ def train_neural_network(X, y):
     print(f"Best AUC score: {best_auc:.3f}")
 
     # Build final model with best activation
-    final_model = Sequential([
-        Dense(64, activation=best_activation,
-              input_shape=(X_scaled.shape[1],)),
-        Dropout(0.3),
-        Dense(32, activation=best_activation),
-        Dropout(0.2),
-        Dense(1, activation='sigmoid')
-    ])
+    input_layer = Input(shape=(X_scaled.shape[1],))
+    x = Dense(64, activation=best_activation)(input_layer)
+    x = Dropout(0.3)(x)
+    x = Dense(32, activation=best_activation)(x)
+    x = Dropout(0.2)(x)
+    output = Dense(1, activation='sigmoid')(x)
+    final_model = tf.keras.models.Model(inputs=input_layer, outputs=output)
 
     final_model.compile(
         optimizer='adam',
@@ -342,37 +299,24 @@ def train_neural_network(X, y):
 
 def evaluate_model(clf, X_test, y_test, model_type: Model):
     """
-    Evaluates either a K-means or Neural Network model on test data
+    Evaluates either a KNN or Neural Network model on test data
 
     Args:
         clf: The trained model
         X_test: Test features
         y_test: True labels
-        model_type: Type of model (KMEANS or NN)
+        model_type: Type of model (KNN or NN)
     """
     # Convert and scale data
     scaler = StandardScaler()
     X_scaled = scaler.fit_transform(
         X_test.toarray() if hasattr(X_test, "toarray") else X_test)
 
-    if model_type == Model.KMEANS:
-        # For K-means, map clusters to labels first
-        cluster_labels = clf.predict(X_scaled)
-
-        # Map clusters to majority class labels
-        cluster_to_label = {}
-        for cluster in range(clf.n_clusters):
-            # Use training labels from the fitted model
-            mask = (clf.labels_ == cluster)
-            if mask.sum() > 0:
-                cluster_to_label[cluster] = np.argmax(
-                    np.bincount(y_test[mask]))
-
-        y_pred = np.array([cluster_to_label.get(label, 0)
-                          for label in cluster_labels])
-        y_proba = np.zeros((len(y_test), 2))
-        y_proba[np.arange(len(y_test)), y_pred] = 1
-        y_proba = y_proba[:, 1]  # Get probabilities for positive class
+    if model_type == Model.KNN:
+        # For KNN, predict both classes and probabilities
+        y_pred = clf.predict(X_scaled)
+        # Probability for positive class
+        y_proba = clf.predict_proba(X_scaled)[:, 1]
 
     elif model_type == Model.NN:
         # For Neural Network, get predictions directly
@@ -388,25 +332,24 @@ def evaluate_model(clf, X_test, y_test, model_type: Model):
     plt.savefig('confusion_matrix_test.png')
     plt.show()
 
-    # Create ROC curve if applicable
-    if model_type == Model.NN or (model_type == Model.KMEANS and len(np.unique(y_pred)) > 1):
-        fpr, tpr, _ = roc_curve(y_test, y_proba)
-        auc = roc_auc_score(y_test, y_proba)
+    # Create ROC curve
+    fpr, tpr, _ = roc_curve(y_test, y_proba)
+    auc = roc_auc_score(y_test, y_proba)
 
-        plt.figure(figsize=(8, 6))
-        plt.plot(fpr, tpr, color='blue', lw=2,
-                 label=f'ROC curve (AUC = {auc:.2f})')
-        plt.plot([0, 1], [0, 1], color='gray',
-                 linestyle='--', lw=2, label='Random')
-        plt.xlim([0.0, 1.0])
-        plt.ylim([0.0, 1.05])
-        plt.xlabel('False Positive Rate')
-        plt.ylabel('True Positive Rate')
-        plt.title('ROC Curve (Test Set)')
-        plt.legend(loc="lower right")
-        plt.grid(alpha=0.3)
-        plt.savefig('roc_curve_test.png', dpi=300, bbox_inches='tight')
-        plt.show()
+    plt.figure(figsize=(8, 6))
+    plt.plot(fpr, tpr, color='blue', lw=2,
+             label=f'ROC curve (AUC = {auc:.2f})')
+    plt.plot([0, 1], [0, 1], color='gray',
+             linestyle='--', lw=2, label='Random')
+    plt.xlim([0.0, 1.0])
+    plt.ylim([0.0, 1.05])
+    plt.xlabel('False Positive Rate')
+    plt.ylabel('True Positive Rate')
+    plt.title('ROC Curve (Test Set)')
+    plt.legend(loc="lower right")
+    plt.grid(alpha=0.3)
+    plt.savefig('roc_curve_test.png', dpi=300, bbox_inches='tight')
+    plt.show()
 
     # Print metrics
     print("\n=== Test Results ===")
@@ -414,6 +357,4 @@ def evaluate_model(clf, X_test, y_test, model_type: Model):
     print(f"Precision: {precision_score(y_test, y_pred):.2f}")
     print(f"Recall: {recall_score(y_test, y_pred):.2f}")
     print(f"F1-score: {f1_score(y_test, y_pred):.2f}")
-
-    if model_type == Model.NN or (model_type == Model.KMEANS and len(np.unique(y_pred)) > 1):
-        print(f"AUC: {roc_auc_score(y_test, y_proba):.2f}")
+    print(f"AUC: {roc_auc_score(y_test, y_proba):.2f}")

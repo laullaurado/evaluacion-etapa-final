@@ -28,21 +28,17 @@ def main():
     df_train = pd.read_csv('./data_train(in).csv', encoding='latin-1')
     df_train = prepro(df_train)
 
-    X_train, vectorizer = create_tfidf_features(df_train)
+    X_train, vectorizer = create_bow_features(df_train)
 
-    # X_train = randomized_svd_transformer(X=X_train, random_state=42)
-
-    clf, _ = train_and_evaluate_model(X_train, df_train['is_suicide'], Model.LR)
+    clf, _ = train_and_evaluate_model(X_train, df_train['is_suicide'], Model.NN)
 
     # Test data
-    df_test = pd.read_csv('./data_test_fold1(in).csv', encoding='latin-1')
+    df_test = pd.read_csv('./data_test_fold2(in).csv', encoding='latin-1')
     df_test = prepro(df_test)
 
     X_test = vectorizer.transform(df_test['text_clean'])
 
-    # X_test = randomized_svd_transformer(X=X_test, random_state=42)
-
-    evaluate_model(clf, X_test, df_test['is_suicide'])
+    evaluate_model(clf, X_test, df_test['is_suicide'], Model.NN)
 
 
 if __name__ == "__main__":

@@ -42,9 +42,6 @@ def evaluation():
         ("BOW", create_bow_features)
     ]
 
-    # # SVD parameters
-    # n_components = 100
-
     # Evaluate all combinations
     for decoder_name, decoder_func in decoders:
         print(f"\n{'='*50}")
@@ -55,12 +52,6 @@ def evaluation():
         print(f"\nCreating {decoder_name} features...")
         X, _ = decoder_func(df)
         print(f"Feature matrix shape: {X.shape}")
-
-        # # Apply SVD
-        # print(f"\nApplying SVD with {n_components} components...")
-        # X_svd = randomized_svd_transformer(
-        #     X=X, n_components=n_components, random_state=42)
-        # print(f"Reduced feature matrix shape: {X_svd.shape}")
 
         # Train and evaluate each model
         for model in Model:
